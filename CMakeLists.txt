@@ -15,6 +15,7 @@ find_package(HDF5 COMPONENTS C)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/model/template)
 include_directories(${GSL_INCLUDE_DIRS})
+include_directories(${HDF5_INCLUDE_DIRS})
 
 # TESTS
 configure_file(src/gff_ei_bremss.dat gff_ei_bremss.dat COPYONLY)
@@ -33,12 +34,12 @@ add_test(NAME bremss_electron_electron COMMAND bremss_ee)
 # Spedify a model with MODEL=
 set(MODEL "iharm" CACHE STRING "Model to compile")
 # Extra includes
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/model/${MODEL})
+include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/model/${MODEL})
 # Enumerate source files, compile
 AUX_SOURCE_DIRECTORY(${CMAKE_CURRENT_SOURCE_DIR}/src EXE_NAME_SRC)
 AUX_SOURCE_DIRECTORY(${CMAKE_CURRENT_SOURCE_DIR}/model/${MODEL} EXE_NAME_SRC)
 add_executable(grmonty ${EXE_NAME_SRC})
 target_link_libraries(grmonty m)
 target_link_libraries(grmonty GSL::gsl GSL::gslcblas)
-target_link_libraries(grmonty OpenMP::OpenMP_CXX)
+target_link_libraries(grmonty OpenMP::OpenMP_C)
 target_link_libraries(grmonty ${HDF5_C_LIBRARIES})

@@ -293,17 +293,28 @@ void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
 
 double _get_model_Ne(double r, double th)
 {
-  double zc=r*cos(th);
-  double rc=r*sin(th);
-  return nth0 * exp(-zc*zc/2./rc/rc/disk_h/disk_h) * pow(r,pow_nth) * Ne_unit;
+  double sth = fabs(sin(th));
+  if (sth < 1.e-12) {
+    return 0.;
+  }
+
+  double zmR = cos(th) / (sth * disk_h);
+  return nth0 * 5.e5 * exp(-0.5 * zmR * zmR) * pow(r / Rh, pow_nth);
+}
+
+static double _get_model_Thetae(double r)
+{
+  return Te0 * 16.8637 * pow(r / Rh, pow_T);
 }
 
 double _get_model_Bmag(double r, double th, double Ne)
 {
-  double eps = 0.1;
-  double B = sqrt(8. * M_PI * eps * Ne * MP * CL * CL / 6. / r);
-  if (B == 0) B = 1.e-6;
-  return B;
+  (void)th;
+  if (Ne <= 0. || r <= 0.) {
+    return 0.;
+  }
+
+  return sqrt(8. * M_PI) * 0.2 * Ne * MP * CL * CL / (6. * r);
 }
 
 double get_model_sigma(const double X[NDIM])
@@ -313,14 +324,114 @@ double get_model_sigma(const double X[NDIM])
 
   double Ne = _get_model_Ne(r, th);
   double Bmag = _get_model_Bmag(r, th, Ne);
+  if (Ne <= 0. || Bmag <= 0.) {
+    return 1.e100;
+  }
 
-  return Bmag*Bmag / Ne / (4. * M_PI * CL * (MP + ME));
+  return Bmag * Bmag / (4. * M_PI * Ne * (MP + ME) * CL * CL);
 }
 
 double get_model_beta(const double X[NDIM])
 {
-  assert(1 == 0);  // unimplemented since we don't know fluid temperature assumptions
-  return 0;
+  double r, th;
+  bl_coord(X, &r, &th);
+
+  double Ne = _get_model_Ne(r, th);
+  double Thetae = _get_model_Thetae(r);
+  double Bmag = _get_model_Bmag(r, th, Ne);
+  if (Ne <= 0. || Thetae <= 0. || Bmag <= 0.) {
+    return 0.;
+  }
+
+  return 8. * M_PI * Ne * Thetae * ME * CL * CL / (Bmag * Bmag);
+}
+
+static void zero_plasma(double *Ne, double *Thetae, double *B,
+          double Ucon[NDIM], double Ucov[NDIM],
+          double Bcon[NDIM], double Bcov[NDIM])
+{
+  *Ne = 0.;
+  *Thetae = 0.;
+  *B = 0.;
+  MULOOP {
+    Ucon[mu] = 0.;
+    Ucov[mu] = 0.;
+    Bcon[mu] = 0.;
+    Bcov[mu] = 0.;
+  }
+}
+
+static int hjw_bl_four_velocity(double r, double th,
+          double bl_gcov[NDIM][NDIM], double bl_gcon[NDIM][NDIM],
+          double bl_Ucon[NDIM])
+{
+  double R = r * sin(th);
+  if (!isfinite(R) || R <= 0.) {
+    return 0;
+  }
+
+  double l = R * sqrt(R) / (R + 1.);
+  double circ_Ucov[NDIM] = { -1., 0., 0., l };
+  double circ_Ucon[NDIM] = { 0. };
+
+  MUNULOOP {
+    circ_Ucon[mu] += bl_gcon[mu][nu] * circ_Ucov[nu];
+  }
+
+  double circ_norm = 0.;
+  MULOOP {
+    circ_norm += circ_Ucon[mu] * circ_Ucov[mu];
+  }
+  if (!isfinite(circ_norm) || circ_norm >= 0.) {
+    return 0;
+  }
+
+  double circ_scale = sqrt(-circ_norm);
+  MULOOP {
+    circ_Ucon[mu] /= circ_scale;
+  }
+
+  double infall_radicand = -(1. + bl_gcon[0][0]) * bl_gcon[1][1];
+  if (!isfinite(infall_radicand) || infall_radicand < 0.) {
+    return 0;
+  }
+
+  double infall_Ucon[NDIM] = {
+    -bl_gcon[0][0],
+    sqrt(infall_radicand),
+    0.,
+    -bl_gcon[0][3]
+  };
+
+  if (circ_Ucon[0] == 0. || infall_Ucon[0] == 0.) {
+    return 0;
+  }
+
+  double omega_orbital = circ_Ucon[3] / circ_Ucon[0];
+  double omega_infall = infall_Ucon[3] / infall_Ucon[0];
+  double omega = omega_orbital + keplerian_factor * (omega_infall - omega_orbital);
+  double ur = circ_Ucon[1] + infall_factor * (infall_Ucon[1] - circ_Ucon[1]);
+
+  double denom = bl_gcov[0][0] + 2. * omega * bl_gcov[0][3] +
+                 omega * omega * bl_gcov[3][3];
+  double ut_radicand = -(1. + bl_gcov[1][1] * ur * ur) / denom;
+  if (!isfinite(ut_radicand) || ut_radicand <= 0.) {
+    return 0;
+  }
+
+  bl_Ucon[0] = sqrt(ut_radicand);
+  bl_Ucon[1] = ur;
+  bl_Ucon[2] = 0.;
+  bl_Ucon[3] = bl_Ucon[0] * omega;
+
+  double bl_Ucov[NDIM];
+  lower(bl_Ucon, bl_gcov, bl_Ucov);
+  double norm = 0.;
+  MULOOP {
+    norm += bl_Ucon[mu] * bl_Ucov[mu];
+  }
+
+  return isfinite(norm) && fabs(norm + 1.) < 1.e-8;
 }
 
 void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
@@ -332,113 +443,26 @@ void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
   bl_coord(X, &r, &th);
 
   if (r < Rin || r > Rout) {
-    *Ne = 0;
+    zero_plasma(Ne, Thetae, B, Ucon, Ucov, Bcon, Bcov);
     return;
   }
 
   // set scalars 
   *Ne = _get_model_Ne(r, th);
-  *Thetae = Te0 * pow(r, pow_T) * Te_unit * KBOL / (ME*CL*CL);
+  *Thetae = _get_model_Thetae(r);
   *B = _get_model_Bmag(r, th, *Ne);
-
-  double eps = 0.1;
-  *B = sqrt(8. * M_PI * eps * (*Ne) * MP * CL * CL / 6. / r);
-  if (*B == 0) *B = 1.e-6;
 
   // Metrics: BL
   double bl_gcov[NDIM][NDIM], bl_gcon[NDIM][NDIM];
   gcov_bl(r, th, bl_gcov);
   gcon_func(bl_gcov, bl_gcon);
-  // Native
-  double gcon[NDIM][NDIM];
-  gcon_func(gcov, gcon);
 
-  // Get the 4-velocity
-  double bl_Ucon[NDIM];
-  double omegaK, omegaFF, omega;
-  double K, ur, ut;
-  if (r < Rh) {
-    // Inside r_h, none
-    double bl_Ucov[NDIM];
-    bl_Ucov[0] = -1;
-    bl_Ucov[1] = 0.;
-    bl_Ucov[2] = 0.;
-    bl_Ucov[3] = 0.;
-    lower(bl_Ucov, bl_gcon, bl_Ucon);
-  } else if (r < r_isco) {
-    // Inside r_isco, freefall
-    double omegaK_isco = 1. / (pow(r_isco, 3./2) + a);
-
-    // Get conserved quantities at the ISCO...
-    double bl_Ucon_isco[NDIM], bl_Ucov_isco[NDIM];
-    bl_Ucon_isco[0] = 1.0;
-    bl_Ucon_isco[1] = 0.0;
-    bl_Ucon_isco[2] = 0.0;
-    bl_Ucon_isco[3] = omegaK_isco;
-
-    double bl_gcov_isco[NDIM][NDIM];
-    gcov_bl(r_isco, th, bl_gcov_isco);
-
-    normalize(bl_Ucon_isco, bl_gcov_isco);
-    lower(bl_Ucon_isco, bl_gcov_isco, bl_Ucov_isco);
-    double e = bl_Ucov_isco[0];
-    double l = bl_Ucov_isco[3];
-
-    // ...then set the infall velocity and find omega
-    double bl_Ucon_tmp[NDIM], bl_Ucov_tmp[NDIM];
-    double K_con = bl_gcon[0][0] * e * e + 2.0 * bl_gcon[0][3] * e * l + bl_gcon[3][3] * l * l;
-    double urk_precut = -(1.0 + K_con) / bl_gcon[1][1];
-    double urk = -sqrt(fmax(0.0, urk_precut));
-    bl_Ucov_tmp[0] = e;
-    bl_Ucov_tmp[1] = urk;
-    bl_Ucov_tmp[2] = 0.0;
-    bl_Ucov_tmp[3] = l;
-    lower(bl_Ucov_tmp, bl_gcon, bl_Ucon_tmp);
-    omegaK = bl_Ucon_tmp[3] / bl_Ucon_tmp[0];
-
-    omegaFF = bl_gcon[0][3] / bl_gcon[0][0];
-    // Compromise
-    omega = omegaK + (1 - keplerian_factor)*(omegaFF - omegaK);
-
-    // Then set the infall rate
-    double urFF = -sqrt(fmax(0.0, -(1.0 + bl_gcon[0][0]) * bl_gcon[1][1]));
-    ur = bl_Ucon_tmp[1] + infall_factor * (urFF - bl_Ucon_tmp[1]);
-
-#if DEBUG
-    if (fabs(ur) < 1e-10) {
-      fprintf(stderr, "Bad ur: ur is %g\n", ur);
-      fprintf(stderr, "Ucon BL: %g %g %g %g\n",
-              bl_Ucon_tmp[0], bl_Ucon_tmp[1], bl_Ucon_tmp[2], bl_Ucon_tmp[3]);
-      fprintf(stderr, "Ucov BL: %g %g %g %g\n",
-              bl_Ucov_tmp[0], bl_Ucov_tmp[1], bl_Ucov_tmp[2], bl_Ucov_tmp[3]);
-      fprintf(stderr, "urk was %g (%g pre-cut), e & l were %g %g\n", urk, urk_precut, e, l);
-    }
-#endif
-
-    // Finally, get Ucon in BL coordinates
-    K = bl_gcov[0][0] + 2*omega*bl_gcov[0][3] + omega*omega*bl_gcov[3][3];
-    ut = sqrt(fmax(0.0, -(1. + ur*ur*bl_gcov[1][1]) / K));
-    bl_Ucon[0] = ut;
-    bl_Ucon[1] = ur;
-    bl_Ucon[2] = 0.;
-    bl_Ucon[3] = omega * ut;
-  } else {
-    // Outside r_isco, Keplerian
-    omegaK = 1. / (pow(r, 3./2) + a);
-    omegaFF = bl_gcon[0][3] / bl_gcon[0][0];
-
-    // Compromise
-    omega = omegaK + (1 - keplerian_factor)*(omegaFF - omegaK);
-    // Set infall rate
-    ur = infall_factor * -sqrt(fmax(0.0, -(1.0 + bl_gcon[0][0]) * bl_gcon[1][1]));
-
-    // Get the normal observer velocity for Ucon/Ucov, in BL coordinates
-    K = bl_gcov[0][0] + 2*omega*bl_gcov[0][3] + omega*omega*bl_gcov[3][3];
-    ut = sqrt(fmax(0.0, -(1. + ur*ur*bl_gcov[1][1]) / K));
-    bl_Ucon[0] = ut;
-    bl_Ucon[1] = ur;
-    bl_Ucon[2] = 0.;
-    bl_Ucon[3] = omega * ut;
+  double bl_Ucon[NDIM] = { NAN, NAN, NAN, NAN };
+  int velocity_ok = hjw_bl_four_velocity(r, th, bl_gcov, bl_gcon, bl_Ucon);
+  // USER PATCH: skip zones where the HJW-style four-velocity is not timelike.
+  if (!velocity_ok) {
+    zero_plasma(Ne, Thetae, B, Ucon, Ucov, Bcon, Bcov);
+    return;
   }
 
   // Transform to KS coordinates,
@@ -454,54 +478,61 @@ void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
   // Check
 #if DEBUG
   //if (r < r_isco) { fprintf(stderr, "ur = %g\n", Ucon[1]); }
-  double bl_Ucov[NDIM];
+  double debug_bl_Ucov[NDIM];
   double dot_U = Ucon[0]*Ucov[0] + Ucon[1]*Ucov[1] + Ucon[2]*Ucov[2] + Ucon[3]*Ucov[3];
   double sum_U = Ucon[0]+Ucon[1]+Ucon[2]+Ucon[3];
   // Following condition gets handled better above
   // (r < r_isco && fabs(Ucon[1]) < 1e-10) ||
   if (get_fluid_nu(Kcon, Ucov) == 1. ||
       fabs(fabs(dot_U) - 1.) > 1e-10 || sum_U < 0.1) {
-    lower(bl_Ucon, bl_gcov, bl_Ucov);
+    lower(bl_Ucon, bl_gcov, debug_bl_Ucov);
     fprintf(stderr, "RIAF model problem at r, th, phi = %g %g %g\n", r, th, X[3]);
-    fprintf(stderr, "Omega K: %g FF: %g Final: %g K: %g ur: %g ut: %g\n",
-            omegaK, omegaFF, omega, K, ur, ut);
-    fprintf(stderr, "K1: %g K2: %g K3: %g\n", bl_gcov[0][0], 2*omega*bl_gcov[0][3], omega*omega*bl_gcov[3][3]);
     fprintf(stderr, "Ucon BL: %g %g %g %g\n", bl_Ucon[0], bl_Ucon[1], bl_Ucon[2], bl_Ucon[3]);
     fprintf(stderr, "Ucon KS: %g %g %g %g\n", ks_Ucon[0], ks_Ucon[1], ks_Ucon[2], ks_Ucon[3]);
     fprintf(stderr, "Ucon native: %g %g %g %g\n", Ucon[0], Ucon[1], Ucon[2], Ucon[3]);
     fprintf(stderr, "Ucov: %g %g %g %g\n", Ucov[0], Ucov[1], Ucov[2], Ucov[3]);
-    fprintf(stderr, "Ubl.Ubl: %g\n", bl_Ucov[0]*bl_Ucon[0]+bl_Ucov[1]*bl_Ucon[1]+
-                                    bl_Ucov[2]*bl_Ucon[2]+bl_Ucov[3]*bl_Ucon[3]);
+    fprintf(stderr, "Ubl.Ubl: %g\n", debug_bl_Ucov[0]*bl_Ucon[0]+debug_bl_Ucov[1]*bl_Ucon[1]+
+                                    debug_bl_Ucov[2]*bl_Ucon[2]+debug_bl_Ucov[3]*bl_Ucon[3]);
     fprintf(stderr, "U.U: %g\n", Ucov[0]*Ucon[0]+Ucov[1]*Ucon[1]+Ucov[2]*Ucon[2]+Ucov[3]*Ucon[3]);
   }
 #endif
 
-  // Use pure toroidal field,
-  // See Themis src/VRT2/src/AccretionFlows/mf_toroidal_beta.cpp/h
+  // HJW RIAF toroidal field.  In BL coordinates this choice is
+  // orthogonal to the fluid four-velocity by construction.
+  double bl_Ucov[NDIM];
+  lower(bl_Ucon, bl_gcov, bl_Ucov);
+  if (bl_Ucov[0] == 0.) {
+    zero_plasma(Ne, Thetae, B, Ucon, Ucov, Bcon, Bcov);
+    return;
+  }
+
   double bl_Bcon[NDIM];
-  bl_Bcon[0] = 0.0;
+  bl_Bcon[0] = -bl_Ucov[3] / bl_Ucov[0];
   bl_Bcon[1] = 0.0;
   bl_Bcon[2] = 0.0;
   bl_Bcon[3] = 1.0;
+
+  double bl_Bcov[NDIM];
+  lower(bl_Bcon, bl_gcov, bl_Bcov);
+  double bl_Bsq = 0.;
+  MULOOP bl_Bsq += bl_Bcon[mu] * bl_Bcov[mu];
+  if (!isfinite(bl_Bsq) || bl_Bsq <= 0. || *B <= 0.) {
+    MULOOP {
+      Bcon[mu] = 0.;
+      Bcov[mu] = 0.;
+    }
+    *B = 0.;
+    return;
+  }
+
+  double bmag_code = *B / B_unit;
+  MULOOP bl_Bcon[mu] *= bmag_code / sqrt(bl_Bsq);
 
   // Transform to KS coordinates,
   double ks_Bcon[NDIM];
   bl_to_ks(X, bl_Bcon, ks_Bcon);
   // then to our coordinates,
   vec_from_ks(X, ks_Bcon, Bcon);
-  normalize(Bcon, gcov);
-
-  // Compute u.b and subtract it, normalize to get_model_b
-  //project_out(Bcon, Ucon, gcov); ?
-  double BdotU = 0;
-  MULOOP BdotU += Bcon[mu] * Ucov[mu];
-  MULOOP Bcon[mu] += BdotU * Ucon[mu];
-  lower(Bcon, gcov, Bcov);
-  double Bsq = 0;
-  MULOOP Bsq += Bcon[mu] * Bcov[mu];
-  double bmag = fmax(*B, 1e-10) / B_unit;
-  MULOOP Bcon[mu] *= bmag / sqrt(Bsq);
-
   lower(Bcon, gcov, Bcov);
 }
 
@@ -553,7 +584,7 @@ void init_data(int argc, char *argv[], Params *params)
 
   // parameter defaults
   MBH_solar = 4.3e6;
-  Ne_unit = 3.e7;
+  Ne_unit = 5.e5;
   Te_unit = 3.e11;
   //rmax_geo = ? // TODO, do these two need to be re-set if we use weird input parameters?
   //rmin_geo = ?
@@ -561,10 +592,10 @@ void init_data(int argc, char *argv[], Params *params)
   nth0 = 1.;
   Te0 = 1.;
   disk_h = 0.1;
-  pow_nth = -1.1;
-  pow_T = -0.84;
-  keplerian_factor = 1.0;
-  infall_factor = 0.0;
+  pow_nth = -2.;
+  pow_T = -1.;
+  keplerian_factor = 0.5;
+  infall_factor = 0.5;
 
   // TODO deal with this in a more clever way
   if (params->loaded && strlen(params->dump) > 0) {
@@ -622,9 +653,9 @@ void init_data(int argc, char *argv[], Params *params)
 
   n2gens = (double ***)malloc_rank3(N1, N2, N3, sizeof(double));
 
-  fprintf(stderr, "Running RIAF model with a=%g, nth0=%g, Te0=%g, disk_h=%g, pow_nth=%g, pow_T=%g\n",
+  fprintf(stderr, "Running HJW-style RIAF model with a=%g, nth0=%g, Te0=%g, disk_h=%g, pow_nth=%g, pow_T=%g\n",
           a, nth0, Te0, disk_h, pow_nth, pow_T);
-  fprintf(stderr, "Velocity model: Keplerian by %g, infall rate %g\n",
+  fprintf(stderr, "Velocity model: omega mix %g, radial mix %g\n",
           keplerian_factor, infall_factor);
 }
 

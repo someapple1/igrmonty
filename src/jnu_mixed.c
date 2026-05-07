@@ -50,6 +50,11 @@ typedef struct int_rpars_struct {
 
 double jnu(double nu, double Ne, double Thetae, double B, double theta, radiation_params *rpars)
 {
+  // USER PATCH: zero-emissivity guard for RIAF vacuum zones.
+  if (Ne <= 0. || B <= 0.) {
+    return 0.;
+  }
+
   double j = 0.;
   
 #if SYNCHROTRON
@@ -74,6 +79,11 @@ double jnu(double nu, double Ne, double Thetae, double B, double theta, radiatio
 
 double jnu_ratio_brems(double nu, double Ne, double Thetae, double B, double theta, radiation_params *rpars)
 {
+  // USER PATCH: zero-emissivity guard for RIAF vacuum zones.
+  if (Ne <= 0. || B <= 0.) {
+    return 0.;
+  }
+
   double synch = 0.;
   double brems = 0.;
 
@@ -107,6 +117,11 @@ double jnu_ratio_brems(double nu, double Ne, double Thetae, double B, double the
 
 double int_jnu(double Ne, double Thetae, double B, double nu, radiation_params *rpars)
 {
+  // USER PATCH: zero-emissivity guard for RIAF vacuum zones.
+  if (Ne <= 0. || B <= 0.) {
+    return 0.;
+  }
+
   double intj = 0.;
   
 #if SYNCHROTRON
