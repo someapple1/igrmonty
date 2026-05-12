@@ -64,7 +64,7 @@ int record_criterion(struct of_photon *ph)
 }
 #undef ROULETTE
 
-#define EPS 0.04
+#define EPS 0.01
 double stepsize(double X[NDIM], double K[NDIM])
 {
   double dl, dlx1, dlx2, dlx3;
@@ -293,18 +293,15 @@ void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
 
 double _get_model_Ne(double r, double th)
 {
-  double sth = fabs(sin(th));
-  if (sth < 1.e-12) {
-    return 0.;
-  }
-
-  double zmR = cos(th) / (sth * disk_h);
-  return nth0 * 5.e5 * exp(-0.5 * zmR * zmR) * pow(r / Rh, pow_nth);
+  double zc = r * cos(th);
+  double rc = r * sin(th);
+  return nth0 * exp(-zc * zc / 2. / rc / rc / disk_h / disk_h) *
+         pow(r, pow_nth) * Ne_unit;
 }
 
 static double _get_model_Thetae(double r)
 {
-  return Te0 * 16.8637 * pow(r / Rh, pow_T);
+  return Te0 * pow(r, pow_T) * Te_unit * KBOL / (ME * CL * CL);
 }
 
 double _get_model_Bmag(double r, double th, double Ne)
@@ -584,16 +581,16 @@ void init_data(int argc, char *argv[], Params *params)
 
   // parameter defaults
   MBH_solar = 4.3e6;
-  Ne_unit = 5.e5;
-  Te_unit = 3.e11;
+  Ne_unit = 6.e7;
+  Te_unit = 1.5e11;
   //rmax_geo = ? // TODO, do these two need to be re-set if we use weird input parameters?
   //rmin_geo = ?
   a = 0.9375;
   nth0 = 1.;
   Te0 = 1.;
-  disk_h = 0.1;
-  pow_nth = -2.;
-  pow_T = -1.;
+  disk_h = 0.5;
+  pow_nth = -1.1;
+  pow_T = -8.4;
   keplerian_factor = 0.5;
   infall_factor = 0.5;
 
@@ -736,15 +733,24 @@ void report_spectrum(int N_superph_made, Params *params)
   // temporary data buffers
   double lnu_buf[N_EBINS];
   double dOmega_buf[N_THBINS];
-  double nuLnu_buf[N_TYPEBINS][N_EBINS][N_THBINS];
-  double tau_abs_buf[N_TYPEBINS][N_EBINS][N_THBINS];
-  double tau_scatt_buf[N_TYPEBINS][N_EBINS][N_THBINS];
-  double x1av_buf[N_TYPEBINS][N_EBINS][N_THBINS];
-  double x2av_buf[N_TYPEBINS][N_EBINS][N_THBINS];
-  double x3av_buf[N_TYPEBINS][N_EBINS][N_THBINS];
-  double nscatt_buf[N_TYPEBINS][N_EBINS][N_THBINS];
+  // USER PATCH: keep large output buffers on the heap so large N_THBINS does not overflow the Windows stack.
+  double (*nuLnu_buf)[N_EBINS][N_THBINS] =
+      malloc_rank1(N_TYPEBINS * N_EBINS * N_THBINS, sizeof(double));
+  double (*tau_abs_buf)[N_EBINS][N_THBINS] =
+      malloc_rank1(N_TYPEBINS * N_EBINS * N_THBINS, sizeof(double));
+  double (*tau_scatt_buf)[N_EBINS][N_THBINS] =
+      malloc_rank1(N_TYPEBINS * N_EBINS * N_THBINS, sizeof(double));
+  double (*x1av_buf)[N_EBINS][N_THBINS] =
+      malloc_rank1(N_TYPEBINS * N_EBINS * N_THBINS, sizeof(double));
+  double (*x2av_buf)[N_EBINS][N_THBINS] =
+      malloc_rank1(N_TYPEBINS * N_EBINS * N_THBINS, sizeof(double));
+  double (*x3av_buf)[N_EBINS][N_THBINS] =
+      malloc_rank1(N_TYPEBINS * N_EBINS * N_THBINS, sizeof(double));
+  double (*nscatt_buf)[N_EBINS][N_THBINS] =
+      malloc_rank1(N_TYPEBINS * N_EBINS * N_THBINS, sizeof(double));
   double Lcomponent_buf[N_TYPEBINS];
-  double nph_buf[N_TYPEBINS][N_EBINS][N_THBINS];
+  double (*nph_buf)[N_EBINS][N_THBINS] =
+      malloc_rank1(N_TYPEBINS * N_EBINS * N_THBINS, sizeof(double));
 
   // normal output routine
   double dOmega, nuLnu, tau_scatt, L, Lcomponent, dL;
@@ -812,6 +818,15 @@ void report_spectrum(int N_superph_made, Params *params)
   double Lum = L * LSUN;
   h5io_add_data_dbl(fid, "/output/L", Lum);
   h5io_add_attribute_str(fid, "/output/L", "units", "erg/s");
+
+  free(nuLnu_buf);
+  free(tau_abs_buf);
+  free(tau_scatt_buf);
+  free(x1av_buf);
+  free(x2av_buf);
+  free(x3av_buf);
+  free(nscatt_buf);
+  free(nph_buf);
 
   // diagnostic output to screen
   fprintf(stderr, "\n");

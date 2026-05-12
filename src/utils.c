@@ -20,6 +20,27 @@ void reset_state(int recph)
 void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
         double Ucon[NDIM], double Bcon[NDIM]);
 
+static int invalid_radiating_zone(double Ne, double Thetae, double B,
+    double Ucon[NDIM], double Bcon[NDIM])
+{
+  if (!isfinite(Ne) || !isfinite(Thetae) || !isfinite(B)) return 1;
+  if (Ne <= 0. || Thetae <= 0. || B <= 0.) return 1;
+
+  for (int mu = 0; mu < NDIM; mu++) {
+    if (!isfinite(Ucon[mu]) || !isfinite(Bcon[mu])) return 1;
+  }
+
+  return 0;
+}
+
+static void zero_tetrad_zone(int i, int j, int k)
+{
+  MUNULOOP {
+    tetrads[i][j][k].Econ[mu][nu] = 0.;
+    tetrads[i][j][k].Ecov[mu][nu] = 0.;
+  }
+}
+
 void init_model(int argc, char *argv[], Params *params)
 {
   fprintf(stderr, "getting simulation data...\n");
@@ -123,7 +144,8 @@ void init_weight_table(void)
     ijktoX(i, j, k, X);
     radiation_params rpars = get_model_radiation_params(X);
 
-    if (Ne == 0.) continue;
+    // USER PATCH: low-density or invalid RIAF zones have no physical emission.
+    if (invalid_radiating_zone(Ne, Thetae, B, Ucon, Bcon)) continue;
 
     for (int l=0; l<N_ESAMP; ++l) {
      #pragma omp atomic
@@ -148,6 +170,13 @@ void init_weight_table(void)
     double X[NDIM] = { 0. };
     ijktoX(i, j, k, X);
     radiation_params rpars = get_model_radiation_params(X);
+
+    // USER PATCH: prevent vacuum/invalid cells from being selected for photon sampling.
+    if (invalid_radiating_zone(Ne, Thetae, Bmag, Ucon, Bcon)) {
+      n2gens[i][j][k] = 0.;
+      continue;
+    }
+
     for (int m=0; m<=N_ESAMP; ++m) {
       ninterp += DLNU * int_jnu(Ne, Thetae, Bmag, exp(m*DLNU + LNUMIN), &rpars) / (HPL*exp(wgt[m]));
     }
@@ -177,9 +206,11 @@ void init_zone(int i, int j, int k, double *nz, double *dnmax)
   ijktoX(i, j, k, X);
   radiation_params rpars = get_model_radiation_params(X);
 
-  if (Ne == 0.) {// || Thetae < THETAE_MIN) {
+  // USER PATCH: zero out invalid cells before constructing per-zone emission weights.
+  if (invalid_radiating_zone(Ne, Thetae, Bmag, Ucon, Bcon)) {// || Thetae < THETAE_MIN) {
     *nz = 0.;
     *dnmax = 0.;
+    n2gens[i][j][k] = 0.;
     return;
   }
 
@@ -258,6 +289,7 @@ int get_zone(int *i, int *j, int *k, double *dnmax)
 
   if (in2gen > 0) {
     init_zone(zi, zj, zk, &n2gen, dnmax);
+    if (n2gen <= 0.) in2gen = 0;
   }
 
   *i = zi;
@@ -376,6 +408,12 @@ void sample_zone_photon(int i, int j, int k, double dnmax, struct of_photon *ph)
   get_fluid_zone(i, j, k, &Ne, &Thetae, &Bmag, Ucon, Bcon);
   radiation_params rpars = get_model_radiation_params(ph->X);
 
+  // USER PATCH: if a vacuum/invalid cell is reached, emit no photon from it.
+  if (invalid_radiating_zone(Ne, Thetae, Bmag, Ucon, Bcon)) {
+    ph->w = 0.;
+    return;
+  }
+
 #ifdef MODEL_TRANSPARENT
 
   // monochromatic
@@ -404,7 +442,16 @@ void sample_zone_photon(int i, int j, int k, double dnmax, struct of_photon *ph)
   weight = zone_linear_interp_weight(nu);
   
   ph->w = weight;
+  if (!isfinite(weight) || weight < 1.) {
+    ph->w = 0.;
+    return;
+  }
+
   jmax = jnu(nu, Ne, Thetae, Bmag, M_PI / 2., &rpars);
+  if (!isfinite(jmax) || jmax <= 0.) {
+    ph->w = 0.;
+    return;
+  }
   do {
     cth = 2. * monty_rand() - 1.;
     th = acos(cth);
@@ -493,22 +540,33 @@ void init_tetrads()
 
         get_fluid_zone(i, j, k, &Ne, &Thetae, &Bmag, Ucon, Bcon);
 
+        // USER PATCH: skip tetrad construction where the RIAF fluid is vacuum or invalid.
+        if (invalid_radiating_zone(Ne, Thetae, Bmag, Ucon, Bcon)) {
+          zero_tetrad_zone(i, j, k);
+          continue;
+        }
+
         lower(Bcon, geom[i][j].gcov, Bcov);
         double Bsq = 0.;
         for (int mu=0; mu<NDIM; ++mu) Bsq += Bcon[mu] * Bcov[mu];
 
-        if (Bmag > 0.) {
-          for (int l = 0; l < NDIM; l++) {
-            bhat[l] = Bcon[l] / sqrt(Bsq);
-          }
-        } else {
-          for (int l = 1; l < NDIM; l++) {
-            bhat[l] = 0.;
-          }
-          bhat[1] = 1.;
+        if (!isfinite(Bsq) || Bsq <= 0.) {
+          zero_tetrad_zone(i, j, k);
+          continue;
+        }
+
+        for (int l = 0; l < NDIM; l++) {
+          bhat[l] = Bcon[l] / sqrt(Bsq);
         }
 
         make_tetrad(Ucon, bhat, geom[i][j].gcov, tetrads[i][j][k].Econ, tetrads[i][j][k].Ecov);
+
+        MUNULOOP {
+          if (!isfinite(tetrads[i][j][k].Econ[mu][nu]) ||
+              !isfinite(tetrads[i][j][k].Ecov[mu][nu])) {
+            zero_tetrad_zone(i, j, k);
+          }
+        }
       }
     }
   }
