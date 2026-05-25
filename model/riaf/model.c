@@ -6,12 +6,12 @@
 
 static double Rmax_record = 1.e4;
 
-double rmax_geo = 1000.;
+double rmax_geo = 80.;
 double rmin_geo = 0.;
-double MBH_solar = 4.3e6;
+double MBH_solar = 6.5e9;
 
-double Te_unit = 1.e11;
-double Ne_unit = 5.e6;
+double Te_unit = 16.8637 * ME * CL * CL / KBOL;
+double Ne_unit = 5.e5;
 
 double nth0, Te0, disk_h, pow_nth, pow_T;
 double keplerian_factor, infall_factor;
@@ -293,15 +293,23 @@ void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
 
 double _get_model_Ne(double r, double th)
 {
-  double zc = r * cos(th);
-  double rc = r * sin(th);
-  return nth0 * exp(-zc * zc / 2. / rc / rc / disk_h / disk_h) *
-         pow(r, pow_nth) * Ne_unit;
+  double sth = sin(th);
+  if (r <= 0. || fabs(sth) < 1.e-12) {
+    return 0.;
+  }
+
+  // USER PATCH: align the scalar RIAF profile with HJW CoportS AccretionFlow.h.
+  double zmR = cos(th) / sth / disk_h;
+  return nth0 * exp(-0.5 * zmR * zmR) * pow(r / Rh, pow_nth) * Ne_unit;
 }
 
 static double _get_model_Thetae(double r)
 {
-  return Te0 * pow(r, pow_T) * Te_unit * KBOL / (ME * CL * CL);
+  if (r <= 0.) {
+    return 0.;
+  }
+
+  return Te0 * pow(r / Rh, pow_T) * Te_unit * KBOL / (ME * CL * CL);
 }
 
 double _get_model_Bmag(double r, double th, double Ne)
@@ -580,17 +588,17 @@ void init_data(int argc, char *argv[], Params *params)
   hslope = 1.;
 
   // parameter defaults
-  MBH_solar = 4.3e6;
-  Ne_unit = 6.e7;
-  Te_unit = 1.5e11;
+  MBH_solar = 6.5e9;//4.3e6; 
+  Ne_unit = 5.e5;
+  Te_unit = 16.8637 * ME * CL * CL / KBOL;
   //rmax_geo = ? // TODO, do these two need to be re-set if we use weird input parameters?
   //rmin_geo = ?
-  a = 0.9375;
+  a = 0.94;
   nth0 = 1.;
   Te0 = 1.;
-  disk_h = 0.5;
-  pow_nth = -1.1;
-  pow_T = -8.4;
+  disk_h = 0.1; 
+  pow_nth = -2.;
+  pow_T = -1.;
   keplerian_factor = 0.5;
   infall_factor = 0.5;
 
@@ -604,8 +612,10 @@ void init_data(int argc, char *argv[], Params *params)
   // Set all the geometry for coordinates.c
   Rh = 1 + sqrt(1. - a * a);  // needed for geodesic steps
 
-  Rin = Rh;
-  Rout = rmax_geo;
+  Rin = 1.02 * Rh;
+  Rout = 80.;
+  rmax_geo = Rout;
+  Rmax = Rout;
 
   Rmax_record = 1.e4;  // this should be large enough that the source looks small
 
@@ -624,7 +634,7 @@ void init_data(int argc, char *argv[], Params *params)
 
   // the larger this is, the thinner the surface zones -> recover low frequency behavior
   N1 = 512;
-  N2 = 512;
+  N2 = 256;
   N3 = 1;
 
   dx[0] = 0.;
@@ -700,7 +710,7 @@ void report_spectrum(int N_superph_made, Params *params)
   h5io_add_data_dbl(fid, "/params/T_unit", T_unit);
   h5io_add_data_dbl(fid, "/params/Thetae_unit", Thetae_unit);
   h5io_add_data_dbl(fid, "/params/Rin", Rin);
-  h5io_add_data_dbl(fid, "/params/Rout", Rmax);
+  h5io_add_data_dbl(fid, "/params/Rout", Rout);
   h5io_add_data_dbl(fid, "/params/bias", biasTuning);
 
   h5io_add_data_dbl(fid, "/params/MBH_solar", MBH_solar);

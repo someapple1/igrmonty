@@ -181,7 +181,7 @@ void init_weight_table(void)
       ninterp += DLNU * int_jnu(Ne, Thetae, Bmag, exp(m*DLNU + LNUMIN), &rpars) / (HPL*exp(wgt[m]));
     }
     ninterp *= geom[i][j].gzone * sfac;
-    n2gens[i][j][k] = ninterp;
+    n2gens[i][j][k] = ninterp; //test
   }
 
   fprintf(stderr, "done.\n\n");
@@ -217,7 +217,7 @@ void init_zone(int i, int j, int k, double *nz, double *dnmax)
   *nz = n2gens[i][j][k];
   ninterp = *nz / geom[i][j].gzone / dx[1]/dx[2]/dx[3] / L_unit/L_unit/L_unit;
 
-  if (*nz > Ns * log(NUMAX / NUMIN)) {
+  if (*nz > Ns * log(NUMAX / NUMIN)) {   
     fprintf(stderr,
       "Something very wrong in zone %d %d: \ng = %g B=%g  Thetae=%g  ninterp=%g nz = %e\n\n",
       i, j, geom[i][j].gzone, Bmag, Thetae, ninterp, *nz);

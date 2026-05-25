@@ -13,6 +13,7 @@ void track_super_photon(struct of_photon *ph)
   double nu, Thetae, Ne, B, theta;
   struct of_photon php;
   double dtauK, frac;
+  double biased_dtau_scatt, scatter_weight_factor;
   double bias = 0.;
   double Xi[NDIM], Ki[NDIM], dKi[NDIM], E0;
   double Gcov[NDIM][NDIM], Ucon[NDIM], Ucov[NDIM], Bcon[NDIM], Bcov[NDIM];
@@ -119,14 +120,20 @@ void track_super_photon(struct of_photon *ph)
       }
 
       x1 = -log(monty_rand());
-      php.w = ph->w/bias;
-      if (ph->ratio_brems < 0.9 && bias*dtau_scatt > x1 && php.w > WEIGHT_MIN) {
+      biased_dtau_scatt = bias * dtau_scatt;
+      scatter_weight_factor = 0.;
+      if (bias > 0. && dtau_scatt > 0.) {
+        // USER PATCH: use the finite-optical-depth biased-scattering weight.
+        scatter_weight_factor = -expm1(-dtau_scatt) / -expm1(-biased_dtau_scatt);
+      }
+      php.w = ph->w * scatter_weight_factor;
+      if (ph->ratio_brems < 0.9 && biased_dtau_scatt > x1 && php.w > WEIGHT_MIN) {
         if (isnan(php.w) || isinf(php.w)) {
           fprintf(stderr, "w isnan in track_super_photon: Ne, bias, ph->w, php.w  %g, %g, %g, %g\n",
             Ne, bias, ph->w, php.w);
         }
 
-        frac = x1 / (bias * dtau_scatt);
+        frac = x1 / biased_dtau_scatt;
 
         // Apply absorption until scattering event
         dtau_abs *= frac;

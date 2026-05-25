@@ -1,12 +1,12 @@
 #define NDIM 4
-#define NUMIN 1.e8
+#define NUMIN 1.e4
 #define NUMAX 1.e24
 #define LNUMIN log(NUMIN)
 #define LNUMAX log(NUMAX)
 #define DLNU ((LNUMAX-LNUMIN)/N_ESAMP)
-#define THETAE_MAX 1000.
-#define THETAE_MIN 0.3
-#define WEIGHT_MIN (1.e28)
+#define THETAE_MAX 100000. //1000.
+#define THETAE_MIN 0.001  //0.3
+#define WEIGHT_MIN (1.e28)   //1.e28
 
 #define SYNCHROTRON (1)
 //Bremss (only supported for thermal electrons) options
@@ -34,8 +34,8 @@
 #define MMW   (0.5)
 
 #define N_ESAMP 200
-#define N_EBINS 200
-#define N_THBINS 18
+#define N_EBINS 200 
+#define N_THBINS 90 //18
 
 #include "hdf5_utils.h"
 #include "h5io.h"
