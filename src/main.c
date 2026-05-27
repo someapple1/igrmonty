@@ -53,6 +53,9 @@ int Ns, N_superph_recorded, N_scatt;
 int record_photons, bad_bias, invalid_bias, quit_flag;
 double Ns_scale, N_superph_made;
 struct of_spectrum spect[N_TYPEBINS][N_THBINS][N_EBINS] = { };
+/* USER DIAGNOSTIC PATCH: diagnostics are written only during the main production loop. */
+FILE *scatter_diag_fp = NULL;
+long long scatter_diag_count = 0;
 
 double t;
 double a;
@@ -69,6 +72,36 @@ double max_tau_scatt, Ladv, dMact, bias_norm;
 
 // Define default, should be set by problem
 double biasTuning = 1.;
+
+/* USER DIAGNOSTIC PATCH: open a CSV of every accepted scattering branch. */
+void scatter_diag_open(const char *fname)
+{
+  scatter_diag_close();
+  scatter_diag_fp = fopen(fname, "w");
+  scatter_diag_count = 0;
+  if (scatter_diag_fp == NULL) {
+    fprintf(stderr, "WARNING: could not open scatter diagnostic file %s\n", fname);
+    return;
+  }
+
+  fprintf(scatter_diag_fp,
+      "event_id,n_before,n_after,"
+      "x0,x1,x2,x3,r_bl,theta_bl,"
+      "Ne,Thetae,B,bias,dtau_scatt,dtau_abs,scatter_weight_factor,"
+      "nu_before_local_hz,nu_after_local_hz,"
+      "nu_before_obs_hz,nu_after_obs_hz,"
+      "E_before_obs,E_after_obs,"
+      "w_parent_pre_abs,w_parent_at_event,w_scatter\n");
+}
+
+/* USER DIAGNOSTIC PATCH: close the scattering diagnostic CSV. */
+void scatter_diag_close(void)
+{
+  if (scatter_diag_fp != NULL) {
+    fclose(scatter_diag_fp);
+    scatter_diag_fp = NULL;
+  }
+}
 
 int main(int argc, char *argv[])
 {
@@ -210,6 +243,7 @@ int main(int argc, char *argv[])
   summary(NULL, NULL); /* initialize main loop timer */
   
   reset_state(1);
+  scatter_diag_open("scatter_events.csv");
  
   #pragma omp parallel firstprivate(quit_flag)
   {
@@ -240,6 +274,7 @@ int main(int argc, char *argv[])
         break;
     }
   }
+  scatter_diag_close();
 
   summary(stderr, "compute ");
 

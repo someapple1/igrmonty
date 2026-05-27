@@ -1,6 +1,6 @@
 #define NDIM 4
 #define NUMIN 1.e4
-#define NUMAX 1.e24
+#define NUMAX 1.e24 //24
 #define LNUMIN log(NUMIN)
 #define LNUMAX log(NUMAX)
 #define DLNU ((LNUMAX-LNUMIN)/N_ESAMP)

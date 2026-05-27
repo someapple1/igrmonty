@@ -14,6 +14,7 @@ void track_super_photon(struct of_photon *ph)
   struct of_photon php;
   double dtauK, frac;
   double biased_dtau_scatt, scatter_weight_factor;
+  double scatter_parent_w;
   double bias = 0.;
   double Xi[NDIM], Ki[NDIM], dKi[NDIM], E0;
   double Gcov[NDIM][NDIM], Ucon[NDIM], Ucov[NDIM], Bcon[NDIM], Bcov[NDIM];
@@ -126,8 +127,11 @@ void track_super_photon(struct of_photon *ph)
         // USER PATCH: use the finite-optical-depth biased-scattering weight.
         scatter_weight_factor = -expm1(-dtau_scatt) / -expm1(-biased_dtau_scatt);
       }
+      scatter_parent_w = ph->w;
       php.w = ph->w * scatter_weight_factor;
-      if (ph->ratio_brems < 0.9 && biased_dtau_scatt > x1 && php.w > WEIGHT_MIN) {
+      // USER DIAGNOSTIC PATCH: match CoportS by keeping accepted scattering branches
+      // even when the scattered branch weight is below WEIGHT_MIN.
+      if (ph->ratio_brems < 0.9 && biased_dtau_scatt > x1) {
         if (isnan(php.w) || isinf(php.w)) {
           fprintf(stderr, "w isnan in track_super_photon: Ne, bias, ph->w, php.w  %g, %g, %g, %g\n",
             Ne, bias, ph->w, php.w);
@@ -178,6 +182,38 @@ void track_super_photon(struct of_photon *ph)
             return;
           }
           scatter_super_photon(ph, &php, Ne, Thetae, B, Ucon, Bcon, Gcov, &rparsp);
+
+          if (scatter_diag_fp != NULL) {
+            // USER DIAGNOSTIC PATCH: record the physical state at the accepted scattering event.
+            double r_bl, th_bl;
+            double nu_before_local, nu_after_local;
+            double nu_before_obs, nu_after_obs;
+            bl_coord(ph->X, &r_bl, &th_bl);
+            nu_before_local = get_fluid_nu(ph->X, ph->K, Ucov);
+            nu_after_local = get_fluid_nu(php.X, php.K, Ucov);
+            nu_before_obs = ph->E0s * ME * CL * CL / HPL;
+            nu_after_obs = php.E * ME * CL * CL / HPL;
+
+            #pragma omp critical (SCATTER_DIAG)
+            {
+              long long event_id = scatter_diag_count++;
+              fprintf(scatter_diag_fp,
+                  "%lld,%d,%d,"
+                  "%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,"
+                  "%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,"
+                  "%.17g,%.17g,"
+                  "%.17g,%.17g,"
+                  "%.17g,%.17g,"
+                  "%.17g,%.17g,%.17g\n",
+                  event_id, ph->nscatt, php.nscatt,
+                  ph->X[0], ph->X[1], ph->X[2], ph->X[3], r_bl, th_bl,
+                  Ne, Thetae, B, bias, dtau_scatt, dtau_abs, scatter_weight_factor,
+                  nu_before_local, nu_after_local,
+                  nu_before_obs, nu_after_obs,
+                  ph->E0s, php.E,
+                  scatter_parent_w, ph->w, php.w);
+            }
+          }
 
           if (ph->w < 1.e-100) {  // Possible problem while enforcing k.k = 0
             return;

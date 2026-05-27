@@ -8,10 +8,10 @@ static double Rmax_record = 1.e4;
 
 double rmax_geo = 80.;
 double rmin_geo = 0.;
-double MBH_solar = 6.5e9;
+double MBH_solar = 4.3e6;
 
 double Te_unit = 16.8637 * ME * CL * CL / KBOL;
-double Ne_unit = 5.e5;
+double Ne_unit = 2.e7;
 
 double nth0, Te0, disk_h, pow_nth, pow_T;
 double keplerian_factor, infall_factor;
@@ -242,6 +242,11 @@ void omp_reduce_spect()
 
 double bias_func(double Te, double w)
 {
+  // USER DIAGNOSTIC PATCH: use CoportS-style fixed scattering bias for comparison.
+  (void)Te;
+  (void)w;
+  return 1.e5;
+
   double bias, max;
 
   max = 0.5 * w / WEIGHT_MIN;
@@ -298,7 +303,7 @@ double _get_model_Ne(double r, double th)
     return 0.;
   }
 
-  // USER PATCH: align the scalar RIAF profile with HJW CoportS AccretionFlow.h.
+  // USER PATCH: align the scalar RIAF profile with the active AccretionFlow.h model.
   double zmR = cos(th) / sth / disk_h;
   return nth0 * exp(-0.5 * zmR * zmR) * pow(r / Rh, pow_nth) * Ne_unit;
 }
@@ -588,8 +593,9 @@ void init_data(int argc, char *argv[], Params *params)
   hslope = 1.;
 
   // parameter defaults
-  MBH_solar = 6.5e9;//4.3e6; 
-  Ne_unit = 5.e5;
+  // USER PATCH: use the active RIAF parameters from E:\Raytracing\igrmonty\AccretionFlow.h.
+  MBH_solar = 4.3e6;
+  Ne_unit = 2.e7;
   Te_unit = 16.8637 * ME * CL * CL / KBOL;
   //rmax_geo = ? // TODO, do these two need to be re-set if we use weird input parameters?
   //rmin_geo = ?
@@ -711,7 +717,8 @@ void report_spectrum(int N_superph_made, Params *params)
   h5io_add_data_dbl(fid, "/params/Thetae_unit", Thetae_unit);
   h5io_add_data_dbl(fid, "/params/Rin", Rin);
   h5io_add_data_dbl(fid, "/params/Rout", Rout);
-  h5io_add_data_dbl(fid, "/params/bias", biasTuning);
+  // USER DIAGNOSTIC PATCH: record the actual fixed bias used by bias_func().
+  h5io_add_data_dbl(fid, "/params/bias", 1.e5);
 
   h5io_add_data_dbl(fid, "/params/MBH_solar", MBH_solar);
   h5io_add_data_dbl(fid, "/params/a", a);

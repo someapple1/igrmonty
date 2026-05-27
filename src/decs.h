@@ -120,6 +120,9 @@ extern int Ns;
 extern int N_superph_recorded, N_scatt;
 extern int record_photons, bad_bias, invalid_bias, quit_flag;
 extern double Ns_scale, N_superph_made;
+/* USER DIAGNOSTIC PATCH: per-scattering-event CSV output for comparing scatter-site distributions. */
+extern FILE *scatter_diag_fp;
+extern long long scatter_diag_count;
 
 /* HARM model globals */
 extern struct of_geom **geom;
@@ -323,3 +326,6 @@ void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
 
 void reset_state(int);
 void summary(FILE *, const char *);
+/* USER DIAGNOSTIC PATCH: open/close the per-scattering-event diagnostic file. */
+void scatter_diag_open(const char *fname);
+void scatter_diag_close(void);
